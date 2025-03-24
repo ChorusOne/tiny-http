@@ -333,6 +333,46 @@ impl Request {
         }
     }
 
+    /// Sends a response with a `Connection: upgrade` header, then turns the `Request` into a `Stream`.
+    /// In addition to the `upgrade()` function the stream is split into it's read and write halfs.
+    ///
+    /// The main purpose of this function is to support websockets.
+    /// If you detect that the request wants to use some kind of protocol upgrade, you can
+    ///  call this function to obtain full control of the socket stream.
+    ///
+    /// If you call this on a non-websocket request, tiny-http will wait until this `Stream` object
+    ///  is destroyed before continuing to read or write on the socket. Therefore you should always
+    ///  destroy it as soon as possible.
+    pub fn upgrade_split<R: Read>(
+        mut self,
+        protocol: &str,
+        response: Response<R>,
+    ) -> (Box<dyn Read + Send>, Box<dyn Write + Send>) {
+        response
+            .raw_print(
+                self.response_writer.as_mut().unwrap().by_ref(),
+                self.http_version.clone(),
+                &self.headers,
+                false,
+                Some(protocol),
+            )
+            .ok(); // TODO: unused result
+
+        self.response_writer.as_mut().unwrap().flush().ok(); // TODO: unused result
+
+        let reader = self.extract_reader_impl();
+        let writer = self.extract_writer_impl();
+        if let Some(sender) = self.notify_when_responded.take() {
+            let writer = NotifyOnDrop {
+                sender,
+                inner: writer,
+            };
+            (Box::new(reader), Box::new(writer))
+        } else {
+            (Box::new(reader), Box::new(writer))
+        }
+    }
+
     /// Allows to read the body of the request.
     ///
     /// # Example
